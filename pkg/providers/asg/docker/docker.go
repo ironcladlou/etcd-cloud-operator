@@ -21,6 +21,7 @@ import (
 
 	"github.com/quentin-m/etcd-cloud-operator/pkg/providers"
 	"github.com/quentin-m/etcd-cloud-operator/pkg/providers/asg"
+	log "github.com/sirupsen/logrus"
 )
 
 func init() {
@@ -45,6 +46,7 @@ func (d *docker) Configure(providerConfig asg.Config) error {
 }
 
 func (d *docker) AutoScalingGroupStatus() (instances []asg.Instance, self asg.Instance, size int, err error) {
+	instancesStr := make([]string, 0, d.config.Size)
 	hostname, _ := os.Hostname()
 
 	// List all containers names, which match the filter.
@@ -62,8 +64,10 @@ func (d *docker) AutoScalingGroupStatus() (instances []asg.Instance, self asg.In
 			self = container
 		}
 		instances = append(instances, container)
+		instancesStr = append(instancesStr, container.address)
 	}
 	size = d.config.Size
 
+	log.Debugf("Discovered %d / %d replicas: %s", len(instances), d.config.Size, strings.Join(instancesStr, ", "))
 	return
 }

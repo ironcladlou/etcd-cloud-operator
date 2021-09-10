@@ -134,6 +134,8 @@ func (s *Operator) evaluate() error {
 	s.etcdHealthy, s.isSeeder, s.states = fetchStatuses(s.httpClient, client, asgInstances, asgSelf)
 	s.clusterSize = asgSize
 
+	log.Debugf("etcdRunning=%v, clusterSize=%v, etcdHealthy=%v, isSeeder=%v, states=%v", s.etcdRunning, s.clusterSize, s.etcdHealthy, s.isSeeder, s.states)
+
 	s.etcdClient = client
 	return nil
 }

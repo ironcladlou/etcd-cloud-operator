@@ -89,7 +89,11 @@ func fetchStatuses(httpClient *http.Client, etcdClient *etcd.Client, asgInstance
 			st, err := fetchStatus(httpClient, asgInstance)
 			if err != nil {
 				log.WithError(err).Warnf("failed to query %s's ECO instance", asgInstance.Name())
-				return
+				st = &status{
+					instance: asgInstance,
+					State:    "UNKNOWN",
+					Revision: 0,
+				}
 			}
 
 			mu.Lock()
@@ -145,6 +149,7 @@ func serverConfig(cfg Config, asgSelf asg.Instance, snapshotProvider snapshot.Pr
 		DataQuota:               cfg.Etcd.BackendQuota,
 		AutoCompactionMode:      cfg.Etcd.AutoCompactionMode,
 		AutoCompactionRetention: cfg.Etcd.AutoCompactionRetention,
+		BindAddress:             asgSelf.BindAddress(),
 		PublicAddress:           stringOverride(asgSelf.Address(), cfg.Etcd.AdvertiseAddress),
 		PrivateAddress:          asgSelf.Address(),
 		ClientSC:                cfg.Etcd.ClientTransportSecurity,
