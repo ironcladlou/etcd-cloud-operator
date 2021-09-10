@@ -1,0 +1,19 @@
+FROM registry.ci.openshift.org/openshift/release:golang-1.16 as builder
+
+WORKDIR /etcd-cloud-operator
+
+RUN wget https://github.com/coreos/etcd/releases/download/v3.4.13/etcd-v3.4.13-linux-amd64.tar.gz -O /tmp/etcd.tar.gz && \
+    mkdir /etcd && \
+    tar xzvf /tmp/etcd.tar.gz -C /etcd --strip-components=1 && \
+    rm /tmp/etcd.tar.gz
+
+COPY . .
+
+RUN CGO_ENABLED=0 go mod vendor
+RUN CGO_ENABLED=0 go build -gcflags=all='-N -l' -o /tmp/etcd-cloud-operator ./cmd/operator
+
+FROM quay.io/openshift/origin-base:4.8
+COPY --from=builder /tmp/etcd-cloud-operator /usr/bin/etcd-cloud-operator
+COPY --from=builder /etcd/etcdctl /usr/bin/etcdctl
+
+ENTRYPOINT /usr/bin/etcd-cloud-operator
