@@ -88,8 +88,12 @@ func fetchStatuses(httpClient *http.Client, etcdClient *etcd.Client, asgInstance
 
 			st, err := fetchStatus(httpClient, asgInstance)
 			if err != nil {
-				zap.S().With(zap.Error(err)).Warnf("failed to query %s", asgInstance.Name())
-				return
+				zap.S().With(zap.Error(err)).Warnf("failed to query %s's ECO instance", asgInstance.Name())
+				st = &status{
+					instance: asgInstance,
+					State:    "UNKNOWN",
+					Revision: 0,
+				}
 			}
 
 			mu.Lock()
