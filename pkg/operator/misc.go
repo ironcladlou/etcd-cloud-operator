@@ -20,6 +20,7 @@ import (
 	"io/ioutil"
 	"net/http"
 	"sort"
+	"strings"
 	"sync"
 	"time"
 
@@ -120,6 +121,18 @@ func fetchStatuses(httpClient *http.Client, etcdClient *etcd.Client, asgInstance
 		}
 		ecoStates[ecoStatus.State]++
 	}
+
+	var statuses []string
+	for _, status := range ecoStatuses {
+		statuses = append(statuses, fmt.Sprintf("name=%s, address=%s, bindAddress=%s, state=%s, rev=%d",
+			status.instance.Name(), status.instance.Address(), status.instance.BindAddress(), status.State, status.Revision))
+	}
+	var instances []string
+	for _, inst := range asgInstances {
+		instances = append(instances, fmt.Sprintf("name=%s, address=%s, bindAddress=%s", inst.Name(), inst.Address(), inst.BindAddress()))
+	}
+	zap.S().Infof("etcdHealthy=%v, self=%s, states=%v, statuses=[%s], instances=[%s]",
+		etcdHealthy, asgSelf.Name(), ecoStates, strings.Join(statuses, ";"), strings.Join(instances, ";"))
 
 	return etcdHealthy, ecoStatuses[len(ecoStatuses)-1].instance.Name() == asgSelf.Name(), ecoStates
 }
