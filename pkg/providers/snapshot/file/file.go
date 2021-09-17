@@ -29,7 +29,7 @@ import (
 	"github.com/quentin-m/etcd-cloud-operator/pkg/providers/snapshot"
 )
 
-const filePermissions = 0600
+const filePermissions = 0700
 
 func init() {
 	snapshot.Register("file", &file{})
