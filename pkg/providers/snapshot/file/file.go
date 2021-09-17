@@ -51,11 +51,14 @@ func (f *file) Configure(providerConfig snapshot.Config) error {
 	if err := os.MkdirAll(f.config.Dir, filePermissions); err != nil {
 		return fmt.Errorf("invalid configuration: failed to create directory %q: %v", f.config.Dir, err)
 	}
+	if err := os.MkdirAll(filepath.Join(f.config.Dir, "tmp"), filePermissions); err != nil {
+		return fmt.Errorf("invalid configuration: failed to create tmp directory %q: %v", filepath.Join(f.config.Dir, "tmp"), err)
+	}
 	return nil
 }
 
 func (f *file) Save(r io.ReadCloser, metadata *snapshot.Metadata) error {
-	tmpF, err := ioutil.TempFile("", metadata.Filename())
+	tmpF, err := ioutil.TempFile(filepath.Join(f.config.Dir, "tmp"), metadata.Filename())
 	if err != nil {
 		return err
 	}
