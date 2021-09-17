@@ -17,3 +17,12 @@ require (
 	gopkg.in/yaml.v2 v2.4.0
 	moul.io/zapfilter v1.6.1
 )
+
+// release-4.9
+replace (
+	go.etcd.io/etcd/api/v3 => github.com/openshift/etcd/api/v3 v3.5.1-0.20210824132657-5c1feaf09d5f
+	go.etcd.io/etcd/client/pkg/v3 => github.com/openshift/etcd/client/pkg/v3 v3.5.1-0.20210824132657-5c1feaf09d5f
+	go.etcd.io/etcd/client/v3 => github.com/openshift/etcd/client/v3 v3.5.1-0.20210824132657-5c1feaf09d5f
+	go.etcd.io/etcd/etcdutl/v3 => github.com/openshift/etcd/etcdutl/v3 v3.5.1-0.20210824132657-5c1feaf09d5f
+	go.etcd.io/etcd/server/v3 => github.com/openshift/etcd/server/v3 v3.5.1-0.20210824132657-5c1feaf09d5f
+)
