@@ -1,0 +1,17 @@
+FROM quay.io/openshift/origin-base:4.9
+
+# 4.9.0-rc.1
+FROM quay.io/openshift-release-dev/ocp-v4.0-art-dev@sha256:ce27c30b22ee2fcbdbf561686302aee5fa5c7a7061688c0e8209e978d50eb6b1 as etcd
+FROM quay.io/openshift-release-dev/ocp-v4.0-art-dev@sha256:4b819490f66e1cfe523a62f67eb3020afd758a03462f1cf7482e46a90d80033e as cli
+
+# For testing with the docker scaling group provider
+FROM docker:20.10.8 as docker
+
+COPY --from=etcd /usr/bin/etcdctl /usr/bin/etcdctl
+COPY --from=cli /usr/bin/oc /usr/bin/oc
+COPY --from=docker /usr/local/bin/docker /usr/bin/docker
+
+COPY etcd-cloud-operator /usr/bin/
+COPY test-e2e /usr/bin/
+
+ENTRYPOINT /usr/bin/etcd-cloud-operator

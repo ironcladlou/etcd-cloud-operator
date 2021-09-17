@@ -1,0 +1,20 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: etcd
+  namespace: etcd
+data:
+  config.yaml: |
+    eco:
+      asg:
+        provider: sts
+      etcd:
+        auto-compaction-mode: periodic
+        auto-compaction-retention: "0"
+        backend-quota: 2147483648
+        data-dir: /var/lib/etcd
+      snapshot:
+        interval: 1800000000000
+        provider: file
+        ttl: 3600000000000
+      unhealthy-member-ttl: 120000000000

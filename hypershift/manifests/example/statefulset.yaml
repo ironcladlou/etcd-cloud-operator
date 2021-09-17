@@ -1,0 +1,115 @@
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: etcd
+  namespace: etcd
+spec:
+  podManagementPolicy: Parallel
+  replicas: 3
+  selector:
+    matchLabels:
+      name: etcd
+  serviceName: discovery
+  template:
+    metadata:
+      labels:
+        name: etcd
+    spec:
+      containers:
+      - command:
+        - /usr/bin/etcd-cloud-operator
+        - --log-level
+        - info
+        - --config
+        - /etc/etcd/config/config.yaml
+        env:
+        - name: ETCD_API
+          value: "3"
+        - name: ETCDCTL_INSECURE_SKIP_TLS_VERIFY
+          value: "true"
+        - name: STATEFULSET_SERVICE_NAME
+          value: discovery
+        - name: STATEFULSET_NAME
+          value: etcd
+        - name: STATEFULSET_DNS_CLUSTER_SUFFIX
+          value: cluster.local
+        - name: POD_IP
+          valueFrom:
+            fieldRef:
+              apiVersion: v1
+              fieldPath: status.podIP
+        - name: STATEFULSET_NAMESPACE
+          valueFrom:
+            fieldRef:
+              apiVersion: v1
+              fieldPath: metadata.namespace
+        - name: STATEFULSET_REPLICAS
+          value: "3"
+        image: quay.io/dmace/etcd-cloud-operator:latest
+        imagePullPolicy: Always
+        readinessProbe:
+          initialDelaySeconds: 1
+          periodSeconds: 1
+          failureThreshold: 10
+          tcpSocket:
+            port: client
+        name: etcd
+        ports:
+        - containerPort: 2379
+          name: client
+          protocol: TCP
+        - containerPort: 2378
+          name: http
+          protocol: TCP
+        - containerPort: 2380
+          name: peer
+          protocol: TCP
+        - containerPort: 2381
+          name: metrics
+          protocol: TCP
+        livenessProbe:
+          httpGet:
+            path: /status
+            port: http
+            scheme: HTTP
+          initialDelaySeconds: 1
+          periodSeconds: 10
+          failureThreshold: 3
+        startupProbe:
+          exec:
+            command:
+            - /bin/sh
+            - -c
+            - /usr/bin/etcdctl --endpoints=${HOSTNAME}:2379 endpoint health
+          failureThreshold: 60
+          periodSeconds: 1
+        resources:
+          requests:
+            cpu: 300m
+            memory: 600Mi
+        volumeMounts:
+        - mountPath: /var/lib
+          name: data
+        - mountPath: /etc/etcd/config
+          name: config
+      terminationGracePeriodSeconds: 30
+      volumes:
+      - configMap:
+          defaultMode: 420
+          name: etcd
+        name: config
+  updateStrategy:
+    type: RollingUpdate
+  volumeClaimTemplates:
+  - apiVersion: v1
+    kind: PersistentVolumeClaim
+    metadata:
+      name: data
+    spec:
+      accessModes:
+      - ReadWriteOnce
+      resources:
+        requests:
+          storage: 1Gi
+      storageClassName: gp2
+      volumeMode: Filesystem
