@@ -67,8 +67,8 @@ type Operator struct {
 
 // Config is the global configuration for an instance of ECO.
 type Config struct {
-	CheckInterval        time.Duration `yaml:"check-interval"`
-	UnhealthyMemberTTL 	 time.Duration `yaml:"unhealthy-member-ttl"`
+	CheckInterval      time.Duration `yaml:"check-interval"`
+	UnhealthyMemberTTL time.Duration `yaml:"unhealthy-member-ttl"`
 
 	Etcd     etcd.EtcdConfiguration `yaml:"etcd"`
 	ASG      asg.Config             `yaml:"asg"`
@@ -101,14 +101,17 @@ func (s *Operator) Run() {
 	go s.webserver()
 
 	for {
+		zap.S().Infof("evaluating cluster state")
 		if err := s.evaluate(); err != nil {
 			zap.S().With(zap.Error(err)).Warn("could not evaluate cluster state")
 			s.wait()
 			continue
 		}
+		zap.S().Infof("executing actions")
 		if err := s.execute(); err != nil {
 			zap.S().With(zap.Error(err)).Warn("could not execute action")
 		}
+		zap.S().Infof("waiting for next sync interval")
 		s.wait()
 	}
 }
@@ -176,7 +179,20 @@ func (s *Operator) execute() error {
 		zap.S().Info("STATUS: Unhealthy + Running + No quorum -> Snapshot + Stop")
 		s.state = "PENDING"
 
-		s.server.Stop(false, true)
+		// TODO: (dan) the call to EtcdServer.HardStop can block for up to 15m in the
+		// partition scenario, so enforce a timeout
+		done := make(chan struct{})
+		go func() {
+			s.server.Stop(false, true)
+			done <- struct{}{}
+		}()
+		select {
+		case <-done:
+			zap.S().Info("etcd server successfully stopped")
+		case <-time.After(15 * time.Second):
+			zap.S().Error("etcd server didn't shut down without graceful timeout, exiting")
+			os.Exit(0)
+		}
 	////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 	////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 	case !s.etcdHealthy && !s.etcdRunning && (s.states["START"] != s.clusterSize || !s.isSeeder):
