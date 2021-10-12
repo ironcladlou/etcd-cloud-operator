@@ -36,6 +36,10 @@ func (i *container) BindAddress() string {
 	return i.address
 }
 
+func (i *container) String() string {
+	return fmt.Sprintf("%s(%s)", i.name, i.address)
+}
+
 func containerList(namePattern string) ([]string, error) {
 	out, err := exec.Command("docker", "ps", fmt.Sprintf("--filter=name=%s", namePattern), "--format={{ .Names }}").CombinedOutput()
 	if err != nil {

@@ -32,7 +32,7 @@ func init() {
 
 type sts struct {
 	namespace, name, serviceName, dnsClusterSuffix string
-	replicas int
+	replicas                                       int
 
 	self instance
 }
@@ -51,6 +51,10 @@ func (i *instance) Address() string {
 
 func (i *instance) BindAddress() string {
 	return "0.0.0.0"
+}
+
+func (i *instance) String() string {
+	return fmt.Sprintf("%s(%s)", i.name, i.address)
 }
 
 func (a *sts) Configure(providerConfig asg.Config) (err error) {
@@ -97,9 +101,9 @@ func (a *sts) AutoScalingGroupStatus() ([]asg.Instance, asg.Instance, int, error
 	instances := make([]asg.Instance, 0, a.replicas)
 	instancesStr := make([]string, 0, a.replicas)
 
-	for i:=0; i<a.replicas; i++ {
+	for i := 0; i < a.replicas; i++ {
 		instance := instance{
-			name: fmt.Sprintf("%s-%d", a.name, i),
+			name:    fmt.Sprintf("%s-%d", a.name, i),
 			address: fmt.Sprintf("%s-%d.%s.%s.svc.%s", a.name, i, a.serviceName, a.namespace, a.dnsClusterSuffix),
 		}
 		instances = append(instances, &instance)

@@ -208,12 +208,13 @@ func (c *Client) IsHealthy(retries int, timeout time.Duration) bool {
 		if err == nil || err == rpctypes.ErrPermissionDenied || err == rpctypes.ErrGRPCCompacted {
 			return true
 		}
+		zap.S().With(zap.Error(err)).Infof("etcd health check failed (attempt %d of %d)", i+1, retries)
 	}
 	return false
 }
 
-func (c *Client) GetHighestRevision() (int64, error) {
-	revs, _, err := c.GetRevisionsHashes()
+func (c *Client) GetHighestRevision(ctx context.Context) (int64, error) {
+	revs, _, err := c.GetRevisionsHashes(ctx)
 	if err != nil {
 		return -1, err
 	}
@@ -228,7 +229,7 @@ func (c *Client) GetHighestRevision() (int64, error) {
 	return maxRev, nil
 }
 
-func (c *Client) IsConsistent() error {
+func (c *Client) IsConsistent(ctx context.Context) error {
 	var (
 		revs   map[string]int64
 		hashes map[string]int64
@@ -236,7 +237,7 @@ func (c *Client) IsConsistent() error {
 	)
 
 	for i := 0; i < 15; i++ {
-		revs, hashes, err = c.GetRevisionsHashes()
+		revs, hashes, err = c.GetRevisionsHashes(ctx)
 		if err != nil || !getSameValue(revs) || !getSameValue(hashes) {
 			time.Sleep(time.Second)
 			continue
@@ -247,12 +248,12 @@ func (c *Client) IsConsistent() error {
 	return fmt.Errorf("cluster is unconsistent: [revisions: %v] and [hashes: %v]", revs, hashes)
 }
 
-func (c *Client) GetRevisionsHashes() (map[string]int64, map[string]int64, error) {
+func (c *Client) GetRevisionsHashes(ctx context.Context) (map[string]int64, map[string]int64, error) {
 	var rhMutex sync.Mutex
 	revs := make(map[string]int64)
 	hashes := make(map[string]int64)
 
-	ctx, cancel := context.WithTimeout(context.Background(), 2*defaultRequestTimeout)
+	ctx, cancel := context.WithTimeout(ctx, 2*defaultRequestTimeout)
 	defer cancel()
 
 	f := func(c *Client, m *etcdserverpb.Member) error {
@@ -279,15 +280,15 @@ func (c *Client) GetRevisionsHashes() (map[string]int64, map[string]int64, error
 	return revs, hashes, c.ForEachMember(f)
 }
 
-func (c *Client) Cleanup() error {
+func (c *Client) Cleanup(ctx context.Context) error {
 	// Get the current revision of the cluster.
-	rev, err := c.GetHighestRevision()
+	rev, err := c.GetHighestRevision(ctx)
 	if err != nil {
 		return err
 	}
 
 	// Compact.
-	ctx, cancel := context.WithTimeout(context.Background(), 300*time.Second)
+	ctx, cancel := context.WithTimeout(ctx, 300*time.Second)
 	defer cancel()
 
 	if _, err := c.Client.Compact(ctx, rev); err != nil && !strings.Contains(err.Error(), mvcc.ErrCompacted.Error()) {

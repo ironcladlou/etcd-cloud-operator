@@ -16,6 +16,8 @@ package asg
 
 import (
 	"sync"
+
+	"go.uber.org/zap/zapcore"
 )
 
 var (
@@ -27,6 +29,16 @@ type Instance interface {
 	Name() string
 	Address() string
 	BindAddress() string
+	String() string
+}
+
+type Instances []Instance
+
+func (a Instances) MarshalLogObject(enc zapcore.ObjectEncoder) error {
+	for _, i := range a {
+		enc.AddString("instance", i.String())
+	}
+	return nil
 }
 
 type Provider interface {

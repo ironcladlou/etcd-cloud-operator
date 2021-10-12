@@ -57,7 +57,7 @@ func Run(cfg Config) {
 	}
 
 	// Compact and defrag the cluster up to this point.
-	if err := c.Cleanup(); err != nil {
+	if err := c.Cleanup(context.TODO()); err != nil {
 		zap.S().With(zap.Error(err)).Fatal("failed to compact/defrag the cluster")
 	}
 }
@@ -70,7 +70,7 @@ func runTest(testCase testCase, client *etcd.Client, cfg Config, dm *dataMarker)
 	defer promSetInjectedFailure("")
 
 	// Compact and defrag the cluster up to this point, and set a data marker.
-	if err := client.Cleanup(); err != nil {
+	if err := client.Cleanup(context.TODO()); err != nil {
 		zap.S().With(zap.Error(err)).Warn("failed to compact/defrag the cluster, next test might be affected")
 	}
 
@@ -115,7 +115,7 @@ func runTest(testCase testCase, client *etcd.Client, cfg Config, dm *dataMarker)
 	stresser.Stop()
 
 	// Verify cluster's consistency and the presence of the data marker.
-	if err := client.IsConsistent(); err != nil {
+	if err := client.IsConsistent(context.TODO()); err != nil {
 		zap.S().With(zap.Error(err)).Fatal("cluster is un-consistent, exiting")
 	}
 	if err := dm.verify(testCase.isLossy); err != nil {

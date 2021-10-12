@@ -19,10 +19,11 @@ import (
 	"crypto/x509"
 	"encoding/pem"
 	"fmt"
-	"gopkg.in/yaml.v2"
 	"io/ioutil"
 	"strings"
 	"time"
+
+	"gopkg.in/yaml.v2"
 
 	"go.etcd.io/etcd/api/v3/v3rpc/rpctypes"
 	"go.etcd.io/etcd/client/v3"
@@ -36,16 +37,16 @@ const (
 	initACLConfigKeyPath  = "/etcd-cloud-operator/init-acl-config"
 )
 
-func (s *Operator) applyACLConfig(ctx context.Context, config *etcd.ACLConfig) error {
+func (s *Operator) applyACLConfig(ctx context.Context, config *etcd.ACLConfig, etcdClient *etcd.Client) error {
 	var err error
 	for _, role := range config.Roles {
-		resp, err := s.etcdClient.RoleGet(ctx, role.Name)
+		resp, err := etcdClient.RoleGet(ctx, role.Name)
 		if err == nil && resp != nil {
-			if _, err := s.etcdClient.RoleDelete(ctx, role.Name); err != nil {
+			if _, err := etcdClient.RoleDelete(ctx, role.Name); err != nil {
 				return err
 			}
 		}
-		if _, err := s.etcdClient.RoleAdd(ctx, role.Name); err != nil {
+		if _, err := etcdClient.RoleAdd(ctx, role.Name); err != nil {
 			return err
 		}
 
@@ -68,7 +69,7 @@ func (s *Operator) applyACLConfig(ctx context.Context, config *etcd.ACLConfig) e
 				return fmt.Errorf("invalid permission mode %q", perm.Mode)
 			}
 
-			_, err = s.etcdClient.RoleGrantPermission(ctx, role.Name, perm.Key, rangeEnd, mode)
+			_, err = etcdClient.RoleGrantPermission(ctx, role.Name, perm.Key, rangeEnd, mode)
 			if err != nil {
 				return err
 			}
@@ -82,18 +83,18 @@ func (s *Operator) applyACLConfig(ctx context.Context, config *etcd.ACLConfig) e
 			opt.NoPassword = true
 		}
 
-		resp, err := s.etcdClient.UserGet(ctx, user.Name)
+		resp, err := etcdClient.UserGet(ctx, user.Name)
 		if err == nil && resp != nil {
-			if _, err := s.etcdClient.UserDelete(ctx, user.Name); err != nil {
+			if _, err := etcdClient.UserDelete(ctx, user.Name); err != nil {
 				return err
 			}
 		}
-		if _, err := s.etcdClient.UserAddWithOptions(ctx, user.Name, user.Password, &opt); err != nil {
+		if _, err := etcdClient.UserAddWithOptions(ctx, user.Name, user.Password, &opt); err != nil {
 			return err
 		}
 
 		for _, role := range user.Roles {
-			_, err = s.etcdClient.UserGrantRole(ctx, user.Name, role)
+			_, err = etcdClient.UserGrantRole(ctx, user.Name, role)
 			if err != nil {
 				return err
 			}
@@ -105,23 +106,23 @@ func (s *Operator) applyACLConfig(ctx context.Context, config *etcd.ACLConfig) e
 		return err
 	}
 
-	if _, err := s.etcdClient.Put(ctx, initACLConfigKeyPath, string(configBytes)); err != nil {
+	if _, err := etcdClient.Put(ctx, initACLConfigKeyPath, string(configBytes)); err != nil {
 		return err
 	}
 
 	return nil
 }
 
-func (s *Operator) removeACLConfig(ctx context.Context, config *etcd.ACLConfig) error {
+func (s *Operator) removeACLConfig(ctx context.Context, config *etcd.ACLConfig, etcdClient *etcd.Client) error {
 	for _, user := range config.Users {
-		_, err := s.etcdClient.UserDelete(ctx, user.Name)
+		_, err := etcdClient.UserDelete(ctx, user.Name)
 		if err != nil && err != rpctypes.ErrUserNotFound {
 			return err
 		}
 	}
 
 	for _, role := range config.Roles {
-		if _, err := s.etcdClient.RoleDelete(ctx, role.Name); err != nil {
+		if _, err := etcdClient.RoleDelete(ctx, role.Name); err != nil {
 			if err == rpctypes.ErrRoleNotFound {
 				continue
 			}
@@ -129,23 +130,23 @@ func (s *Operator) removeACLConfig(ctx context.Context, config *etcd.ACLConfig) 
 		}
 	}
 
-	_, err := s.etcdClient.Delete(ctx, initACLConfigKeyPath)
+	_, err := etcdClient.Delete(ctx, initACLConfigKeyPath)
 	if err != nil && err != rpctypes.ErrKeyNotFound {
 		return err
 	}
 	return nil
 }
 
-func (s *Operator) reconcileInitACLConfig(config *etcd.ACLConfig) error {
+func (s *Operator) reconcileInitACLConfig(config *etcd.ACLConfig, etcdClient *etcd.Client) error {
 	ctx, cancel := context.WithTimeout(context.Background(), defaultRequestTimeout)
 	defer cancel()
 
-	if err := s.enableACL(ctx, config); err != nil {
+	if err := s.enableACL(ctx, config, etcdClient); err != nil {
 		zap.S().With(zap.Error(err)).Error("failed to enable ACL")
 		return err
 	}
 
-	oldACLConfig, err := s.getOldACLConfig(ctx)
+	oldACLConfig, err := s.getOldACLConfig(ctx, etcdClient)
 	if err != nil {
 		zap.S().With(zap.Error(err)).Error("failed to get old ACL config")
 		return err
@@ -153,12 +154,12 @@ func (s *Operator) reconcileInitACLConfig(config *etcd.ACLConfig) error {
 
 	if !oldACLConfig.Equal(config) {
 		if oldACLConfig != nil {
-			if err := s.removeACLConfig(ctx, oldACLConfig); err != nil {
+			if err := s.removeACLConfig(ctx, oldACLConfig, etcdClient); err != nil {
 				zap.S().With(zap.Error(err)).Error("failed to remove ACL config")
 				return err
 			}
 		}
-		if err := s.applyACLConfig(ctx, config); err != nil {
+		if err := s.applyACLConfig(ctx, config, etcdClient); err != nil {
 			zap.S().With(zap.Error(err)).Error("failed to apply ACL config")
 			return err
 		}
@@ -167,70 +168,70 @@ func (s *Operator) reconcileInitACLConfig(config *etcd.ACLConfig) error {
 	return nil
 }
 
-func (s *Operator) enableACL(ctx context.Context, config *etcd.ACLConfig) error {
+func (s *Operator) enableACL(ctx context.Context, config *etcd.ACLConfig, etcdClient *etcd.Client) error {
 	commonName, err := s.getCertCommonName()
 	if err != nil {
 		return err
 	}
 
-	resp, err := s.etcdClient.UserGet(ctx, commonName)
+	resp, err := etcdClient.UserGet(ctx, commonName)
 	if err == nil && resp != nil {
 		for _, role := range resp.Roles {
 			if role == "root" {
 				return nil
 			}
 		}
-		if _, err := s.etcdClient.UserDelete(ctx, commonName); err != nil {
+		if _, err := etcdClient.UserDelete(ctx, commonName); err != nil {
 			return err
 		}
 	}
 
-	_, err = s.etcdClient.RoleAdd(ctx, "root")
+	_, err = etcdClient.RoleAdd(ctx, "root")
 	if err != nil && err != rpctypes.ErrRoleAlreadyExist {
 		return err
 	}
 
 	if config.RootPassword == nil || *config.RootPassword == "" {
-		_, err = s.etcdClient.UserAddWithOptions(ctx, "root", "", &clientv3.UserAddOptions{NoPassword: true})
+		_, err = etcdClient.UserAddWithOptions(ctx, "root", "", &clientv3.UserAddOptions{NoPassword: true})
 		if err != nil && err != rpctypes.ErrUserAlreadyExist {
 			return err
 		}
 	} else {
-		_, err = s.etcdClient.UserAdd(ctx, "root", *config.RootPassword)
+		_, err = etcdClient.UserAdd(ctx, "root", *config.RootPassword)
 		if err != nil && err != rpctypes.ErrUserAlreadyExist {
 			return err
 		}
 	}
 
-	if _, err := s.etcdClient.UserGrantRole(ctx, "root", "root"); err != nil {
+	if _, err := etcdClient.UserGrantRole(ctx, "root", "root"); err != nil {
 		return err
 	}
 
-	if _, err := s.etcdClient.UserAddWithOptions(ctx, commonName, "", &clientv3.UserAddOptions{NoPassword: true}); err != nil {
+	if _, err := etcdClient.UserAddWithOptions(ctx, commonName, "", &clientv3.UserAddOptions{NoPassword: true}); err != nil {
 		return err
 	}
 
-	if _, err := s.etcdClient.UserGrantRole(ctx, commonName, "root"); err != nil {
+	if _, err := etcdClient.UserGrantRole(ctx, commonName, "root"); err != nil {
 		return err
 	}
 
-	if _, err := s.etcdClient.UserAddWithOptions(ctx, "etcd", "", &clientv3.UserAddOptions{NoPassword: true}); err != nil {
-			return err
+	if _, err := etcdClient.UserAddWithOptions(ctx, "etcd", "", &clientv3.UserAddOptions{NoPassword: true}); err != nil {
+		return err
 	}
 
-	if _, err := s.etcdClient.UserGrantRole(ctx, "etcd", "root"); err != nil {
-			return err
+	if _, err := etcdClient.UserGrantRole(ctx, "etcd", "root"); err != nil {
+		return err
 	}
 
-	if _, err := s.etcdClient.AuthEnable(ctx); err != nil {
+	if _, err := etcdClient.AuthEnable(ctx); err != nil {
 		return err
 	}
 
 	return nil
 }
 
-func (s *Operator) getOldACLConfig(ctx context.Context) (*etcd.ACLConfig, error) {
-	resp, err := s.etcdClient.Get(ctx, initACLConfigKeyPath)
+func (s *Operator) getOldACLConfig(ctx context.Context, etcdClient *etcd.Client) (*etcd.ACLConfig, error) {
+	resp, err := etcdClient.Get(ctx, initACLConfigKeyPath)
 	if err != nil {
 		return nil, err
 	}
