@@ -85,7 +85,7 @@ func fetchEcoStatuses(httpClient *http.Client, port int, asgInstances []asg.Inst
 	wg.Add(len(asgInstances))
 
 	// Fetch ECO statuses.
-	var ecoStatuses []*status
+	var ecoStatuses []status
 	for _, asgInstance := range asgInstances {
 		go func(asgInstance asg.Instance) {
 			defer wg.Done()
@@ -94,7 +94,7 @@ func fetchEcoStatuses(httpClient *http.Client, port int, asgInstances []asg.Inst
 			st, err := fetchStatus(httpClient, port, asgInstance)
 			if err != nil {
 				zap.S().With(zap.Error(err)).Warnf("failed to query %s's ECO instance", asgInstance.Name())
-				st = &status{
+				st = status{
 					instance: asgInstance,
 					State:    "UNKNOWN",
 					Revision: 0,
@@ -141,7 +141,7 @@ func fetchEcoStatuses(httpClient *http.Client, port int, asgInstances []asg.Inst
 	return ecoStatuses[len(ecoStatuses)-1].instance.Name() == asgSelf.Name(), ecoStates
 }
 
-func fetchStatus(httpClient *http.Client, port int, instance asg.Instance) (*status, error) {
+func fetchStatus(httpClient *http.Client, port int, instance asg.Instance) (status, error) {
 	var st = status{
 		instance: instance,
 		State:    "UNKNOWN",
@@ -150,15 +150,15 @@ func fetchStatus(httpClient *http.Client, port int, instance asg.Instance) (*sta
 
 	resp, err := httpClient.Get(fmt.Sprintf("http://%s:%d/status", instance.Address(), port))
 	if err != nil {
-		return &st, err
+		return st, err
 	}
 	defer resp.Body.Close()
 
 	b, err := ioutil.ReadAll(resp.Body)
 	if err != nil {
-		return &st, err
+		return st, err
 	}
 
 	err = json.Unmarshal(b, &st)
-	return &st, err
+	return st, err
 }

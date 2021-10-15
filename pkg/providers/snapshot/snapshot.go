@@ -28,6 +28,10 @@ var (
 	ErrNoSnapshot = errors.New("no snapshot available")
 )
 
+func init() {
+	Register("noop", UnsafeNoopProvider{})
+}
+
 type Provider interface {
 	Configure(Config) error
 
@@ -90,3 +94,12 @@ func AsList() []string {
 	}
 	return r
 }
+
+type UnsafeNoopProvider struct{}
+
+func (_ UnsafeNoopProvider) Configure(Config) error { return nil }
+
+func (_ UnsafeNoopProvider) Save(io.ReadCloser, *Metadata) error { return nil }
+func (_ UnsafeNoopProvider) Get(*Metadata) (string, bool, error) { return "", false, ErrNoSnapshot }
+func (_ UnsafeNoopProvider) Info() (*Metadata, error)            { return nil, ErrNoSnapshot }
+func (_ UnsafeNoopProvider) Purge(time.Duration) error           { return nil }
