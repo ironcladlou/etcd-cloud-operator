@@ -26,6 +26,7 @@ type Manifests struct {
 	Replicas        int
 	LogLevel        string
 	EnableProfiling bool
+	SnapshotConfig  snapshot.Config
 }
 
 func (m *Manifests) labels() map[string]string {
@@ -63,18 +64,14 @@ func (m *Manifests) ECOConfigMap() *corev1.ConfigMap {
 			UnhealthyMemberTTL: 2 * time.Minute,
 			Etcd: etcd.EtcdConfiguration{
 				DataDir:                 "/var/lib/etcd",
-				BackendQuota:            2 * 1024 * 1024 * 1024,
+				BackendQuota:            4 * 1024 * 1024 * 1024,
 				AutoCompactionMode:      "periodic",
 				AutoCompactionRetention: "0",
 			},
 			ASG: asg.Config{
 				Provider: "sts",
 			},
-			Snapshot: snapshot.Config{
-				Provider: "file",
-				Interval: 30 * time.Minute,
-				TTL:      24 * time.Hour,
-			},
+			Snapshot: m.SnapshotConfig,
 		},
 	}
 	configBytes, err := yaml.Marshal(ecoConfig)
@@ -356,7 +353,7 @@ func (m *Manifests) StatefulSet() *appsv1.StatefulSet {
 						AccessModes:      []corev1.PersistentVolumeAccessMode{corev1.ReadWriteOnce},
 						Resources: corev1.ResourceRequirements{
 							Requests: corev1.ResourceList{
-								corev1.ResourceStorage: resource.MustParse("1Gi"),
+								corev1.ResourceStorage: resource.MustParse("4Gi"),
 							},
 						},
 					},

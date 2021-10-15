@@ -19,6 +19,7 @@ func TestInteractiveCluster(t *testing.T) {
 	clusterOpts := TestClusterOptions{
 		LogLevel:         opts.EtcdLogLevel,
 		ProfilingEnabled: opts.ProfilingEnabled,
+		SnapshotsEnabled: false,
 	}
 	_, destroyCluster, err := clusterOpts.CreateCluster(ctx, t, kubeClient)
 	if err != nil {
@@ -41,6 +42,7 @@ func TestKillLeader(t *testing.T) {
 	clusterOpts := TestClusterOptions{
 		LogLevel:         opts.EtcdLogLevel,
 		ProfilingEnabled: opts.ProfilingEnabled,
+		SnapshotsEnabled: false,
 	}
 	cluster, destroyCluster, err := clusterOpts.CreateCluster(ctx, t, kubeClient)
 	if err != nil {
@@ -82,6 +84,7 @@ func TestKillAll(t *testing.T) {
 	clusterOpts := TestClusterOptions{
 		LogLevel:         opts.EtcdLogLevel,
 		ProfilingEnabled: opts.ProfilingEnabled,
+		SnapshotsEnabled: false,
 	}
 	cluster, destroyCluster, err := clusterOpts.CreateCluster(ctx, t, kubeClient)
 	if err != nil {
@@ -139,6 +142,7 @@ func TestTransientMajorityOutage(t *testing.T) {
 	clusterOpts := TestClusterOptions{
 		LogLevel:         opts.EtcdLogLevel,
 		ProfilingEnabled: opts.ProfilingEnabled,
+		SnapshotsEnabled: false,
 	}
 	cluster, destroyCluster, err := clusterOpts.CreateCluster(ctx, t, kubeClient)
 	if err != nil {

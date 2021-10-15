@@ -10,6 +10,7 @@ import (
 	"github.com/openshift/etcd-cloud-operator/e2e/stress"
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/quentin-m/etcd-cloud-operator/pkg/etcd"
+	"github.com/quentin-m/etcd-cloud-operator/pkg/providers/snapshot"
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -40,11 +41,7 @@ type testCluster struct {
 type TestClusterOptions struct {
 	LogLevel         string
 	ProfilingEnabled bool
-}
-
-var DefaultTestClusterOptions = TestClusterOptions{
-	LogLevel:         "error",
-	ProfilingEnabled: false,
+	SnapshotsEnabled bool
 }
 
 func (o TestClusterOptions) CreateCluster(ctx context.Context, t *testing.T, kubeClient crclient.Client) (*testCluster, func(context.Context), error) {
@@ -55,6 +52,20 @@ func (o TestClusterOptions) CreateCluster(ctx context.Context, t *testing.T, kub
 	namespace := GenerateName("etcd-")
 	clusterSize := 3
 
+	var snapshotConfig snapshot.Config
+	if o.SnapshotsEnabled {
+		snapshotConfig = snapshot.Config{
+			Provider: "file",
+			Interval: 5 * time.Minute,
+			TTL:      10 * time.Minute,
+		}
+	} else {
+		snapshotConfig = snapshot.Config{
+			Provider: "noop",
+			Interval: 5 * time.Minute,
+		}
+	}
+
 	t.Logf("creating etcd cluster in namespace %s", namespace)
 	manifests := &Manifests{
 		TestID:          testID,
@@ -63,6 +74,7 @@ func (o TestClusterOptions) CreateCluster(ctx context.Context, t *testing.T, kub
 		Replicas:        clusterSize,
 		LogLevel:        o.LogLevel,
 		EnableProfiling: o.ProfilingEnabled,
+		SnapshotConfig:  snapshotConfig,
 	}
 	resources := []crclient.Object{
 		manifests.Namespace(), manifests.ECOConfigMap(), manifests.DiscoveryService(),
