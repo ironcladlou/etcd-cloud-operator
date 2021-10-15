@@ -15,13 +15,6 @@
 package operator
 
 import (
-	"encoding/json"
-	"fmt"
-	"io/ioutil"
-	"net/http"
-	"sort"
-	"strings"
-	"sync"
 	"time"
 
 	"github.com/quentin-m/etcd-cloud-operator/pkg/etcd"
@@ -31,16 +24,8 @@ import (
 )
 
 const (
-	isHealthRetries  = 3
 	isHealthyTimeout = 5 * time.Second
 )
-
-type status struct {
-	instance asg.Instance
-
-	State    string `json:"state"`
-	Revision int64  `json:"revision"`
-}
 
 func initProviders(cfg Config) (asg.Provider, snapshot.Provider) {
 	if cfg.ASG.Provider == "" {
@@ -66,162 +51,6 @@ func initProviders(cfg Config) (asg.Provider, snapshot.Provider) {
 	}
 
 	return asgProvider, snapshotProvider
-}
-
-func fetchStatuses(httpClient *http.Client, etcdClient *etcd.Client, asgInstances []asg.Instance, asgSelf asg.Instance) (bool, bool, map[string]int) {
-	var wg sync.WaitGroup
-	var mu sync.Mutex
-	wg.Add(1 + len(asgInstances))
-
-	// Fetch etcd's healthiness.
-	var etcdHealthy bool
-	go func() {
-		defer wg.Done()
-		start := time.Now()
-		etcdHealthy = etcdClient != nil && etcdClient.IsHealthy(isHealthRetries, isHealthyTimeout)
-		zap.S().Infof("etcd health check completed in %s", time.Since(start).Round(time.Second))
-	}()
-
-	// Fetch ECO statuses.
-	var ecoStatuses []*status
-	for _, asgInstance := range asgInstances {
-		go func(asgInstance asg.Instance) {
-			defer wg.Done()
-
-			start := time.Now()
-			st, err := fetchStatus(httpClient, asgInstance)
-			if err != nil {
-				zap.S().With(zap.Error(err)).Warnf("failed to query %s's ECO instance", asgInstance.Name())
-				st = &status{
-					instance: asgInstance,
-					State:    "UNKNOWN",
-					Revision: 0,
-				}
-			}
-
-			mu.Lock()
-			defer mu.Unlock()
-
-			zap.S().Infof("operator status check for instance %s completed in %s", asgInstance.Name(), time.Since(start))
-			ecoStatuses = append(ecoStatuses, st)
-		}(asgInstance)
-	}
-	wg.Wait()
-
-	// Sort the ECO statuses so we can systematically find the identity of the seeder.
-	sort.Slice(ecoStatuses, func(i, j int) bool {
-		if ecoStatuses[i].Revision == ecoStatuses[j].Revision {
-			return ecoStatuses[i].instance.Name() < ecoStatuses[j].instance.Name()
-		}
-		return ecoStatuses[i].Revision < ecoStatuses[j].Revision
-	})
-
-	// Count ECO statuses and determine if we are the seeder.
-	ecoStates := make(map[string]int)
-	for _, ecoStatus := range ecoStatuses {
-		if _, ok := ecoStates[ecoStatus.State]; !ok {
-			ecoStates[ecoStatus.State] = 0
-		}
-		ecoStates[ecoStatus.State]++
-	}
-
-	var statuses []string
-	for _, status := range ecoStatuses {
-		statuses = append(statuses, fmt.Sprintf("name=%s, address=%s, bindAddress=%s, state=%s, rev=%d",
-			status.instance.Name(), status.instance.Address(), status.instance.BindAddress(), status.State, status.Revision))
-	}
-	var instances []string
-	for _, inst := range asgInstances {
-		instances = append(instances, fmt.Sprintf("name=%s, address=%s, bindAddress=%s", inst.Name(), inst.Address(), inst.BindAddress()))
-	}
-	zap.S().Infof("etcdHealthy=%v, self=%s, states=%v, statuses=[%s], instances=[%s]",
-		etcdHealthy, asgSelf.Name(), ecoStates, strings.Join(statuses, ";"), strings.Join(instances, ";"))
-
-	return etcdHealthy, ecoStatuses[len(ecoStatuses)-1].instance.Name() == asgSelf.Name(), ecoStates
-}
-
-func fetchEcoStatuses(httpClient *http.Client, asgInstances []asg.Instance, asgSelf asg.Instance) (bool, map[string]int) {
-	var wg sync.WaitGroup
-	var mu sync.Mutex
-	wg.Add(len(asgInstances))
-
-	// Fetch ECO statuses.
-	var ecoStatuses []*status
-	for _, asgInstance := range asgInstances {
-		go func(asgInstance asg.Instance) {
-			defer wg.Done()
-
-			start := time.Now()
-			st, err := fetchStatus(httpClient, asgInstance)
-			if err != nil {
-				zap.S().With(zap.Error(err)).Warnf("failed to query %s's ECO instance", asgInstance.Name())
-				st = &status{
-					instance: asgInstance,
-					State:    "UNKNOWN",
-					Revision: 0,
-				}
-			}
-
-			mu.Lock()
-			defer mu.Unlock()
-
-			zap.S().Debugf("operator status check for instance %s completed in %s", asgInstance.Name(), time.Since(start).Round(time.Millisecond))
-			ecoStatuses = append(ecoStatuses, st)
-		}(asgInstance)
-	}
-	wg.Wait()
-
-	// Sort the ECO statuses so we can systematically find the identity of the seeder.
-	sort.Slice(ecoStatuses, func(i, j int) bool {
-		if ecoStatuses[i].Revision == ecoStatuses[j].Revision {
-			return ecoStatuses[i].instance.Name() < ecoStatuses[j].instance.Name()
-		}
-		return ecoStatuses[i].Revision < ecoStatuses[j].Revision
-	})
-
-	// Count ECO statuses and determine if we are the seeder.
-	ecoStates := make(map[string]int)
-	for _, ecoStatus := range ecoStatuses {
-		if _, ok := ecoStates[ecoStatus.State]; !ok {
-			ecoStates[ecoStatus.State] = 0
-		}
-		ecoStates[ecoStatus.State]++
-	}
-
-	var statuses []string
-	for _, status := range ecoStatuses {
-		statuses = append(statuses, fmt.Sprintf("name=%s, address=%s, bindAddress=%s, state=%s, rev=%d",
-			status.instance.Name(), status.instance.Address(), status.instance.BindAddress(), status.State, status.Revision))
-	}
-	var instances []string
-	for _, inst := range asgInstances {
-		instances = append(instances, fmt.Sprintf("name=%s, address=%s, bindAddress=%s", inst.Name(), inst.Address(), inst.BindAddress()))
-	}
-	zap.S().Debugf("self=%s, states=%v, statuses=[%s], instances=[%s]", asgSelf.Name(), ecoStates, strings.Join(statuses, ";"), strings.Join(instances, ";"))
-
-	return ecoStatuses[len(ecoStatuses)-1].instance.Name() == asgSelf.Name(), ecoStates
-}
-
-func fetchStatus(httpClient *http.Client, instance asg.Instance) (*status, error) {
-	var st = status{
-		instance: instance,
-		State:    "UNKNOWN",
-		Revision: 0,
-	}
-
-	resp, err := httpClient.Get(fmt.Sprintf("http://%s:%d/status", instance.Address(), webServerPort))
-	if err != nil {
-		return &st, err
-	}
-	defer resp.Body.Close()
-
-	b, err := ioutil.ReadAll(resp.Body)
-	if err != nil {
-		return &st, err
-	}
-
-	err = json.Unmarshal(b, &st)
-	return &st, err
 }
 
 func serverConfig(cfg Config, asgSelf asg.Instance, snapshotProvider snapshot.Provider) etcd.ServerConfig {

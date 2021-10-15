@@ -15,10 +15,11 @@
 package main
 
 import (
-	"gopkg.in/yaml.v2"
 	"io/ioutil"
 	"os"
 	"time"
+
+	"gopkg.in/yaml.v2"
 
 	"go.uber.org/zap"
 
@@ -37,15 +38,14 @@ type config struct {
 func defaultConfig() config {
 	return config{
 		ECO: operator.Config{
-			CheckInterval: 15 * time.Second,
 			UnhealthyMemberTTL: 2 * time.Minute,
 			Etcd: etcd.EtcdConfiguration{
 				DataDir: "/var/lib/etcd",
 				PeerTransportSecurity: etcd.SecurityConfig{
 					AutoTLS: true,
 				},
-				BackendQuota: 2 * 1024 * 1024 * 1024,
-				AutoCompactionMode: "periodic",
+				BackendQuota:            2 * 1024 * 1024 * 1024,
+				AutoCompactionMode:      "periodic",
 				AutoCompactionRetention: "0",
 			},
 			Snapshot: snapshot.Config{

@@ -55,17 +55,27 @@ func main() {
 		zap.S().With(zap.Error(err)).Fatal("failed to load configuration")
 	}
 
+	ctx, cancel := context.WithCancel(context.Background())
+	sigs := make(chan os.Signal, 1)
+	signal.Notify(sigs, syscall.SIGINT, syscall.SIGTERM)
+	go func() {
+		<-sigs
+		cancel()
+	}()
+
 	if addr := *flagPprofAddr; len(addr) > 0 {
-		go startPprofServer(addr)
+		go startPprofServer(ctx, addr)
 	}
 
 	// Run.
-	operator.New(config.ECO).Run()
+	if err := operator.New(config.ECO).Run(ctx); err != nil {
+		zap.S().With(zap.Error(err)).Fatal("operator failed with an error")
+	} else {
+		zap.S().Info("operator is exiting gracefully")
+	}
 }
 
-func startPprofServer(addr string) {
-	shutdownChan := make(chan os.Signal, 1)
-	signal.Notify(shutdownChan, syscall.SIGTERM, syscall.SIGINT)
+func startPprofServer(ctx context.Context, addr string) {
 	mux := http.NewServeMux()
 	mux.HandleFunc("/debug/pprof/", pprof.Index)
 	mux.HandleFunc("/debug/pprof/cmdline", pprof.Cmdline)
@@ -79,7 +89,7 @@ func startPprofServer(addr string) {
 		WriteTimeout: 30 * time.Second,
 	}
 	go func() {
-		<-shutdownChan
+		<-ctx.Done()
 		timeout, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 		defer cancel()
 		if err := server.Shutdown(timeout); err != nil {

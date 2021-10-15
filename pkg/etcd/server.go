@@ -428,20 +428,20 @@ func (c *Server) runMemberCleaner() {
 
 		for _, member := range c.server.Server.Cluster().Members() {
 			if !member.IsStarted() {
-				zap.S().Infof("cleaner keeping member %s because it's not started", member.Name)
+				zap.S().Debugf("cleaner keeping member %s because it's not started", member.Name)
 				continue
 			}
 
 			// Register the member's first seen time if it's a new member.
 			if _, ok := members[member.ID]; !ok {
 				members[member.ID] = &memberT{name: member.Name, firstSeen: time.Now()}
-				zap.S().Infof("cleaner member %s was observed for the first time", member.Name)
+				zap.S().Debugf("cleaner member %s was observed for the first time", member.Name)
 			}
 
 			// Determine if the member is healthy and set the last time the member has been seen healthy.
 			if c, err := NewClient([]string{URL2Address(member.PeerURLs[0])}, c.cfg.ClientSC, false); err == nil {
 				if c.IsHealthy(5, 5*time.Second) {
-					zap.S().Infof("cleaner member %s was observed to be healthy", member.Name)
+					zap.S().Debugf("cleaner member %s was observed to be healthy", member.Name)
 					members[member.ID].lastSeenHealthy = time.Now()
 				}
 				c.Close()
@@ -451,15 +451,15 @@ func (c *Server) runMemberCleaner() {
 		for id, member := range members {
 			// Give the member time to start if it's a new one.
 			if time.Since(member.firstSeen) < defaultStartTimeout && (member.lastSeenHealthy == time.Time{}) {
-				zap.S().Infof("cleaner keeping member %s because it's still considered new", member.name)
+				zap.S().Debugf("cleaner keeping member %s because it's still considered new", member.name)
 				continue
 			}
 			// Allow the member a graceful period.
 			if time.Since(member.lastSeenHealthy) < c.cfg.UnhealthyMemberTTL {
-				zap.S().Infof("cleaner keeping member %s because it was last seen before the TTL", member.name)
+				zap.S().Debugf("cleaner keeping member %s because it was last seen before the TTL", member.name)
 				continue
 			}
-			zap.S().Infof("cleaner removing member %q that's been unhealthy for %v", member.name, c.cfg.UnhealthyMemberTTL)
+			zap.S().Debugf("cleaner removing member %q that's been unhealthy for %v", member.name, c.cfg.UnhealthyMemberTTL)
 
 			cl, err := NewClient([]string{c.cfg.PrivateAddress}, c.cfg.ClientSC, false)
 			if err != nil {

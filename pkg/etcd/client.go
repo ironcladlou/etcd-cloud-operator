@@ -208,7 +208,7 @@ func (c *Client) IsHealthy(retries int, timeout time.Duration) bool {
 		if err == nil || err == rpctypes.ErrPermissionDenied || err == rpctypes.ErrGRPCCompacted {
 			return true
 		}
-		zap.S().With(zap.Error(err)).Infof("etcd health check failed (attempt %d of %d)", i+1, retries)
+		zap.S().With(zap.Error(err)).Warnf("etcd health check failed (attempt %d of %d)", i+1, retries)
 	}
 	return false
 }

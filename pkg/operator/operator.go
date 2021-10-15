@@ -15,22 +15,21 @@
 package operator
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"net/http"
 	"os"
 	"os/signal"
-	"sync"
 	"syscall"
 	"time"
 
-	"go.uber.org/zap"
-	"go.uber.org/zap/zapcore"
-
 	"github.com/quentin-m/etcd-cloud-operator/pkg/etcd"
+	"github.com/quentin-m/etcd-cloud-operator/pkg/operator/status"
 	"github.com/quentin-m/etcd-cloud-operator/pkg/providers/asg"
 	"github.com/quentin-m/etcd-cloud-operator/pkg/providers/snapshot"
+	"go.uber.org/zap"
 )
 
 const (
@@ -45,9 +44,6 @@ type Operator struct {
 	asgProvider      asg.Provider
 	snapshotProvider snapshot.Provider
 
-	shutdownChan chan os.Signal
-	shutdown     bool
-
 	etcdSnapshot *snapshot.Metadata
 
 	state string
@@ -55,7 +51,6 @@ type Operator struct {
 
 // Config is the global configuration for an instance of ECO.
 type Config struct {
-	CheckInterval      time.Duration `yaml:"check-interval"`
 	UnhealthyMemberTTL time.Duration `yaml:"unhealthy-member-ttl"`
 
 	Etcd     etcd.EtcdConfiguration `yaml:"etcd"`
@@ -79,230 +74,90 @@ func New(cfg Config) *Operator {
 		asgProvider:      asgProvider,
 		snapshotProvider: snapshotProvider,
 		state:            "UNKNOWN",
-		shutdownChan:     shutdownChan,
 	}
 }
 
-type AsgStatus struct {
-	Instances   asg.Instances
-	Self        asg.Instance
-	ClusterSize int
+type worldStatus struct {
+	ASG      status.AsgStatus
+	Operator status.OperatorStatus
+	Etcd     status.EtcdStatus
 }
 
-func (a AsgStatus) MarshalLogObject(enc zapcore.ObjectEncoder) error {
-	enc.AddObject("instances", a.Instances)
-	enc.AddString("self", a.Self.String())
-	enc.AddInt("clusterSize", a.ClusterSize)
-	return nil
+func (w worldStatus) IsValid() bool {
+	return w.ASG.IsValid() && w.Operator.IsValid()
 }
 
-type EcoStatus struct {
-	States   map[string]int
-	IsSeeder bool
-}
-
-type EtcdStatus struct {
-	IsHealthy bool
-}
-
-type World struct {
-	ASG  *AsgStatus
-	ECO  *EcoStatus
-	Etcd *EtcdStatus
-}
-
-func (a World) MarshalLogObject(enc zapcore.ObjectEncoder) error {
-	if a.ASG != nil {
-		enc.AddObject("asg", a.ASG)
-	}
-	if a.ECO != nil {
-		enc.AddReflected("eco", a.ECO)
-	}
-	if a.Etcd != nil {
-		enc.AddReflected("etcd", a.Etcd)
-	}
-	return nil
-}
-
-type asgCollector struct {
-	value *AsgStatus
-	mu    sync.Mutex
-}
-
-func (c *asgCollector) run(provider asg.Provider) {
-	for {
-		start := time.Now()
-		asgInstances, asgSelf, asgSize, err := provider.AutoScalingGroupStatus()
-		zap.S().With("instances", asg.Instances(asgInstances), "self", asgSelf, "size", asgSize).Debugf("asg status evaluation completed in %s", time.Since(start).Round(time.Millisecond))
-		if err != nil {
-			zap.S().With(zap.Error(err)).Warn("failed to sync auto-scaling group")
-		} else {
-			c.mu.Lock()
-			c.value = &AsgStatus{
-				Instances:   asgInstances,
-				Self:        asgSelf,
-				ClusterSize: asgSize,
-			}
-			c.mu.Unlock()
-		}
-		time.Sleep(5 * time.Second)
-	}
-}
-
-func (c *asgCollector) get() *AsgStatus {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	return c.value
-}
-
-type ecoCollector struct {
-	value *EcoStatus
-	mu    sync.Mutex
-}
-
-func (c *ecoCollector) run(client *http.Client, asgCollector *asgCollector) {
-	for {
-		currAsg := asgCollector.get()
-		if currAsg != nil {
-			start := time.Now()
-			isSeeder, states := fetchEcoStatuses(client, currAsg.Instances, currAsg.Self)
-			zap.S().With("asg", currAsg).Debugf("eco status evaluation completed in %s", time.Since(start).Round(time.Millisecond))
-			c.mu.Lock()
-			c.value = &EcoStatus{
-				States:   states,
-				IsSeeder: isSeeder,
-			}
-			c.mu.Unlock()
-		}
-		time.Sleep(1 * time.Second)
-	}
-}
-
-func (c *ecoCollector) get() *EcoStatus {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	return c.value
-}
-
-type etcdCollector struct {
-	value *EtcdStatus
-	mu    sync.Mutex
-}
-
-func (c *etcdCollector) run(asgCollector *asgCollector, cfg *Config) {
-	for {
-		currAsg := asgCollector.get()
-		if currAsg != nil {
-			client, err := etcd.NewClient(instancesAddresses(currAsg.Instances), cfg.Etcd.ClientTransportSecurity, true)
-			if err != nil {
-				zap.S().With(zap.Error(err)).With("asg", currAsg).Warn("failed to create etcd cluster client")
-			} else {
-				start := time.Now()
-				etcdHealthy := client.IsHealthy(isHealthRetries, isHealthyTimeout)
-				zap.S().With("asg", currAsg).Infof("etcd health check completed in %s", time.Since(start).Round(time.Second))
-
-				c.mu.Lock()
-				c.value = &EtcdStatus{IsHealthy: etcdHealthy}
-				c.mu.Unlock()
-
-				if err := client.Close(); err != nil {
-					zap.S().With(zap.Error(err)).Warn("failed to close etcd client")
-				}
-			}
-		}
-		time.Sleep(1 * time.Second)
-	}
-}
-
-func (c *etcdCollector) get() *EtcdStatus {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	if c.value == nil {
-		return &EtcdStatus{IsHealthy: false}
-	}
-	return c.value
-}
-
-type worldCollector struct {
-	value *World
-	mu    sync.Mutex
-}
-
-func (c *worldCollector) run(asgC *asgCollector, ecoC *ecoCollector, etcdC *etcdCollector) {
-	for {
-		asgStatus, ecoStatus, etcdStatus := asgC.get(), ecoC.get(), etcdC.get()
-		c.mu.Lock()
-		c.value = &World{
-			ASG:  asgStatus,
-			ECO:  ecoStatus,
-			Etcd: etcdStatus,
-		}
-		c.mu.Unlock()
-		time.Sleep(1 * time.Second)
-	}
-}
-
-func (c *worldCollector) get() *World {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	return c.value
-}
-
-func (s *Operator) Run() {
-	go s.webserver()
-
-	asgC := &asgCollector{}
-	ecoC := &ecoCollector{}
-	etcdC := &etcdCollector{}
-	worldC := &worldCollector{}
-
-	go asgC.run(s.asgProvider)
-	go ecoC.run(&http.Client{Timeout: isHealthyTimeout}, asgC)
-	go etcdC.run(asgC, &s.cfg)
-	go worldC.run(asgC, ecoC, etcdC)
+func (s *Operator) Run(ctx context.Context) error {
+	ctx, shutdown := context.WithCancel(ctx)
+	defer shutdown()
 
 	go func() {
-		for {
-			w := worldC.get()
-			if w != nil && w.ECO != nil && w.ASG != nil {
-				start := time.Now()
-				if err := s.execute(w); err != nil {
-					zap.S().With(zap.Error(err)).Warn("failed to execute state machine")
-				}
-				zap.S().With("world", w).Infof("state machine executed in %s", time.Since(start).Round(time.Millisecond))
-			}
-			time.Sleep(1 * time.Second)
+		if err := s.webserver(ctx); err != nil {
+			zap.S().With(zap.Error(err)).Warn("status server failed, shutting down")
+			shutdown()
 		}
 	}()
 
-	<-s.shutdownChan
+	asgCache := status.NewAsgCache(s.asgProvider)
+	operatorCache := status.NewOperatorCache(&http.Client{Timeout: isHealthyTimeout}, webServerPort, asgCache)
+	etcdCache := status.NewEtcdCache(asgCache, &s.cfg.Etcd, 3, isHealthyTimeout)
+
+	go asgCache.Run(ctx)
+	go operatorCache.Run(ctx)
+	go etcdCache.Run(ctx)
+
+	var lastWorld worldStatus
+	for {
+		asgStatus, operatorStatus, etcdStatus := asgCache.Value(), operatorCache.Value(), etcdCache.Value()
+		w := worldStatus{
+			ASG:      asgStatus,
+			Operator: operatorStatus,
+			Etcd:     etcdStatus,
+		}
+		if w.IsValid() {
+			zap.S().With("old", lastWorld, "new", w).Infof("executing state machine")
+			start := time.Now()
+			if err := s.execute(w); err != nil {
+				zap.S().With(zap.Error(err)).Warn("failed to execute state machine")
+			}
+			zap.S().Infof("state machine executed in %s", time.Since(start).Round(time.Millisecond))
+		}
+		lastWorld = w
+
+		select {
+		case <-time.After(5 * time.Second):
+		case <-ctx.Done():
+			zap.S().Info("STATUS: Shutdown signal received -> Snapshot + Stop")
+			s.state = "PENDING"
+			if s.server != nil {
+				s.server.Stop(lastWorld.Etcd.IsHealthy, true)
+			}
+			return nil
+		}
+	}
 }
 
-func (s *Operator) execute(w *World) error {
+func (s *Operator) execute(w worldStatus) error {
 	if s.server == nil {
 		s.server = etcd.NewServer(serverConfig(s.cfg, w.ASG.Self, s.snapshotProvider))
 	}
 
-	etcdClient, err := etcd.NewClient(instancesAddresses(w.ASG.Instances), s.cfg.Etcd.ClientTransportSecurity, true)
-	if err != nil {
-		return fmt.Errorf("failed to create etcd cluster client: %w", err)
-	}
-	defer etcdClient.Close()
-
 	switch {
-	////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
-	case s.shutdown:
-		zap.S().Info("STATUS: Received SIGTERM -> Snapshot + Stop")
-		s.state = "PENDING"
-
-		s.server.Stop(w.Etcd.IsHealthy, true)
-		os.Exit(0)
 	////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 	////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 	case w.Etcd.IsHealthy && !s.server.IsRunning():
 		zap.S().Info("STATUS: Healthy + Not running -> Join")
 		s.state = "PENDING"
 
+		etcdClient, err := etcd.NewClient(instancesAddresses(w.ASG.Instances), s.cfg.Etcd.ClientTransportSecurity, true)
+		if err != nil {
+			return fmt.Errorf("failed to create etcd cluster client: %w", err)
+		}
+		defer func() {
+			if err := etcdClient.Close(); err != nil {
+				zap.S().With(zap.Error(err)).Error("failed to close etcd client")
+			}
+		}()
 		if err := s.server.Join(etcdClient); err != nil {
 			zap.S().With(zap.Error(err)).Error("failed to join the cluster")
 		}
@@ -312,10 +167,10 @@ func (s *Operator) execute(w *World) error {
 		s.state = "OK"
 	////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 	////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
-	case !w.Etcd.IsHealthy && s.server.IsRunning() && time.Since(s.server.Started()) > 30*time.Second && w.ECO.States["OK"] >= w.ASG.ClusterSize/2+1:
+	case !w.Etcd.IsHealthy && s.server.IsRunning() && time.Since(s.server.Started()) > 30*time.Second && w.Operator.States["OK"] >= w.ASG.ClusterSize/2+1:
 		zap.S().Info("STATUS: Unhealthy + Running -> Pending confirmation from other ECO instances")
 		s.state = "PENDING"
-	case !w.Etcd.IsHealthy && s.server.IsRunning() && time.Since(s.server.Started()) > 30*time.Second && w.ECO.States["OK"] < w.ASG.ClusterSize/2+1:
+	case !w.Etcd.IsHealthy && s.server.IsRunning() && time.Since(s.server.Started()) > 30*time.Second && w.Operator.States["OK"] < w.ASG.ClusterSize/2+1:
 		zap.S().Info("STATUS: Unhealthy + Running + No quorum -> Snapshot + Stop")
 		s.state = "PENDING"
 
@@ -330,12 +185,13 @@ func (s *Operator) execute(w *World) error {
 		case <-done:
 			zap.S().Info("etcd server successfully stopped")
 		case <-time.After(15 * time.Second):
+			// TODO: return a non-recoverable error and exit elsewhere
 			zap.S().Error("etcd server didn't shut down without graceful timeout, exiting")
-			os.Exit(0)
+			os.Exit(1)
 		}
 	////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 	////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
-	case !w.Etcd.IsHealthy && !s.server.IsRunning() && (w.ECO.States["START"] != w.ASG.ClusterSize || !w.ECO.IsSeeder):
+	case !w.Etcd.IsHealthy && !s.server.IsRunning() && (w.Operator.States["START"] != w.ASG.ClusterSize || !w.Operator.IsSeeder):
 		if s.state != "START" {
 			var err error
 			if s.etcdSnapshot, err = s.server.SnapshotInfo(); err != nil && err != snapshot.ErrNoSnapshot {
@@ -345,7 +201,7 @@ func (s *Operator) execute(w *World) error {
 		zap.S().Info("STATUS: Unhealthy + Not running -> Ready to start + Pending all ready / seeder")
 		s.state = "START"
 	////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
-	case !w.Etcd.IsHealthy && !s.server.IsRunning() && w.ECO.States["START"] == w.ASG.ClusterSize && w.ECO.IsSeeder:
+	case !w.Etcd.IsHealthy && !s.server.IsRunning() && w.Operator.States["START"] == w.ASG.ClusterSize && w.Operator.IsSeeder:
 		zap.S().Info("STATUS: Unhealthy + Not running + All ready + Seeder status -> Seeding cluster")
 		s.state = "START"
 
@@ -360,7 +216,16 @@ func (s *Operator) execute(w *World) error {
 		////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 	}
 
-	if s.state == "OK" && w.ECO.IsSeeder && s.cfg.Etcd.InitACL != nil {
+	if s.state == "OK" && w.Operator.IsSeeder && s.cfg.Etcd.InitACL != nil {
+		etcdClient, err := etcd.NewClient(instancesAddresses(w.ASG.Instances), s.cfg.Etcd.ClientTransportSecurity, true)
+		if err != nil {
+			return fmt.Errorf("failed to create etcd cluster client: %w", err)
+		}
+		defer func() {
+			if err := etcdClient.Close(); err != nil {
+				zap.S().With(zap.Error(err)).Error("failed to close etcd client")
+			}
+		}()
 		if err := s.reconcileInitACLConfig(s.cfg.Etcd.InitACL, etcdClient); err != nil {
 			zap.S().With(zap.Error(err)).Error("failed to reconcile initial ACL config")
 			return err
@@ -370,9 +235,15 @@ func (s *Operator) execute(w *World) error {
 	return nil
 }
 
-func (s *Operator) webserver() {
-	http.HandleFunc("/status", func(w http.ResponseWriter, _ *http.Request) {
-		st := status{State: s.state}
+type state struct {
+	State    string `json:"state"`
+	Revision int64  `json:"revision"`
+}
+
+func (s *Operator) webserver(ctx context.Context) error {
+	mux := http.NewServeMux()
+	mux.HandleFunc("/status", func(w http.ResponseWriter, _ *http.Request) {
+		st := state{State: s.state}
 		if s.etcdSnapshot != nil {
 			st.Revision = s.etcdSnapshot.Revision
 		}
@@ -385,5 +256,27 @@ func (s *Operator) webserver() {
 			zap.S().With(zap.Error(err)).Warn("failed to write status")
 		}
 	})
-	zap.S().Fatal(http.ListenAndServe(fmt.Sprintf(":%d", webServerPort), nil))
+	server := http.Server{
+		Addr:         fmt.Sprintf(":%d", webServerPort),
+		Handler:      mux,
+		ReadTimeout:  5 * time.Second,
+		WriteTimeout: 5 * time.Second,
+	}
+	go func() {
+		<-ctx.Done()
+		timeout, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+		defer cancel()
+		if err := server.Shutdown(timeout); err != nil {
+			zap.S().With(zap.Error(err)).Info("error shutting down status server")
+		} else {
+			zap.S().Info("status server shutdown cleanly")
+		}
+	}()
+	zap.S().With("addr", server.Addr).Info("starting status server")
+	if err := server.ListenAndServe(); err != nil && err != http.ErrServerClosed {
+		return fmt.Errorf("status server exited with an error: %w", err)
+	} else {
+		zap.S().Info("status server exited")
+	}
+	return nil
 }
