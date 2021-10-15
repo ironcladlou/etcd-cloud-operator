@@ -38,16 +38,16 @@ type testCluster struct {
 }
 
 type TestClusterOptions struct {
-	LogLevel        string
-	EnableProfiling bool
+	LogLevel         string
+	ProfilingEnabled bool
 }
 
 var DefaultTestClusterOptions = TestClusterOptions{
-	LogLevel:        "error",
-	EnableProfiling: true,
+	LogLevel:         "error",
+	ProfilingEnabled: false,
 }
 
-func (o TestClusterOptions) CreateCluster(ctx context.Context, t *testing.T, kubeClient crclient.Client) (*testCluster, func(ctx context.Context)) {
+func (o TestClusterOptions) CreateCluster(ctx context.Context, t *testing.T, kubeClient crclient.Client) (*testCluster, func(context.Context), error) {
 	start := time.Now()
 	testID := ctx.Value("testID").(string)
 	testName := strings.ReplaceAll(t.Name(), "/", "_")
@@ -56,28 +56,28 @@ func (o TestClusterOptions) CreateCluster(ctx context.Context, t *testing.T, kub
 	clusterSize := 3
 
 	t.Logf("creating etcd cluster in namespace %s", namespace)
-	cluster := &Manifests{
+	manifests := &Manifests{
 		TestID:          testID,
 		TestName:        testName,
 		TestNamespace:   namespace,
 		Replicas:        clusterSize,
 		LogLevel:        o.LogLevel,
-		EnableProfiling: o.EnableProfiling,
+		EnableProfiling: o.ProfilingEnabled,
 	}
 	resources := []crclient.Object{
-		cluster.Namespace(), cluster.ECOConfigMap(), cluster.DiscoveryService(),
-		cluster.ClientService(), cluster.StatefulSet(), cluster.ServiceMonitor(),
+		manifests.Namespace(), manifests.ECOConfigMap(), manifests.DiscoveryService(),
+		manifests.ClientService(), manifests.StatefulSet(), manifests.ServiceMonitor(),
 	}
 	for _, obj := range resources {
 		t.Logf("creating resource %s/%s/%s", obj.GetObjectKind().GroupVersionKind().Kind, obj.GetNamespace(), obj.GetName())
 		if err := kubeClient.Create(ctx, obj); err != nil {
-			t.Fatalf("failed to create etcd cluster resource: %v", err)
+			return nil, nil, fmt.Errorf("failed to create etcd cluster resource: %w", err)
 		}
 	}
 
 	// Asynchronously record the time it takes the stateful set to report ready
 	go func() {
-		ss := cluster.StatefulSet().DeepCopy()
+		ss := manifests.StatefulSet().DeepCopy()
 		if err := wait.PollUntil(5*time.Second, func() (bool, error) {
 			if err := kubeClient.Get(ctx, crclient.ObjectKeyFromObject(ss), ss); err != nil {
 				return false, nil
@@ -95,24 +95,24 @@ func (o TestClusterOptions) CreateCluster(ctx context.Context, t *testing.T, kub
 	clientService := fmt.Sprintf("client.%s.svc.cluster.local", namespace)
 	etcdClient, err := etcd.NewClient([]string{clientService}, etcd.SecurityConfig{}, true)
 	if err != nil {
-		t.Fatalf("failed to create etcd cluster client: %v", err)
+		return nil, nil, fmt.Errorf("failed to create etcd cluster client: %w", err)
 	}
 
 	t.Logf("verifying cluster health at %s", clientService)
-	func() {
+	if err := func() error {
 		timeout, cancel := context.WithTimeout(ctx, 2*time.Minute)
 		defer cancel()
-		if err := wait.PollUntil(5*time.Second, func() (bool, error) {
+		return wait.PollUntil(5*time.Second, func() (bool, error) {
 			if _, err := IsHealthy(ctx, etcdClient, clusterSize); err != nil {
 				t.Logf("cluster still isn't healthy: %v", err)
 				return false, nil
 			} else {
 				return true, nil
 			}
-		}, timeout.Done()); err != nil {
-			t.Fatalf("cluster never became healthy: %v", err)
-		}
-	}()
+		}, timeout.Done())
+	}(); err != nil {
+		return nil, nil, fmt.Errorf("failed waiting for cluster to be healthy: %w", err)
+	}
 	InitialClusterStartupSeconds.
 		With(prometheus.Labels{"test_id": testID, "test_name": testName}).
 		Add(time.Since(start).Seconds())
@@ -137,7 +137,7 @@ func (o TestClusterOptions) CreateCluster(ctx context.Context, t *testing.T, kub
 		size:          clusterSize,
 		client:        etcdClient,
 		clientService: clientService,
-	}, cancelFn
+	}, cancelFn, nil
 }
 
 func (c *testCluster) GetMemberNamesOrDie(ctx context.Context, t *testing.T) []string {

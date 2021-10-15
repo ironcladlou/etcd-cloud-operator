@@ -44,15 +44,19 @@ var (
 
 // options are global test options applicable to all scenarios.
 type options struct {
-	LogLevel    string
-	MetricsAddr string
+	LogLevel         string
+	EtcdLogLevel     string
+	MetricsAddr      string
+	ProfilingEnabled bool
 }
 
 // TestMain deals with global options and setting up a signal-bound context
 // for all tests to use.
 func TestMain(m *testing.M) {
 	flag.StringVar(&opts.LogLevel, "log-level", "info", "logging level")
+	flag.StringVar(&opts.EtcdLogLevel, "etcd-log-level", "info", "logging level for etcd test clusters")
 	flag.StringVar(&opts.MetricsAddr, "metrics-addr", ":8000", "metrics bind address")
+	flag.BoolVar(&opts.ProfilingEnabled, "profiling-enabled", false, "enables profiling on test clusters")
 	flag.Parse()
 
 	logger.Configure(opts.LogLevel)
