@@ -35,7 +35,7 @@ func RecordTestDuration(ctx context.Context, t *testing.T, start time.Time) {
 
 var (
 	// opts are global options for the test suite bound in TestMain.
-	opts = &options{}
+	opts = &GlobalOptions{}
 
 	// globalCtx should be used as the parent context for any test code, and will
 	// be cancelled if a SIGINT or SIGTERM is received. It's set up in TestMain.
@@ -43,20 +43,24 @@ var (
 )
 
 // options are global test options applicable to all scenarios.
-type options struct {
-	LogLevel         string
-	EtcdLogLevel     string
-	MetricsAddr      string
-	ProfilingEnabled bool
+type GlobalOptions struct {
+	LogLevel              string
+	MetricsAddr           string
+	defaultClusterOptions TestClusterOptions
+}
+
+func (o GlobalOptions) DefaultClusterOptions() TestClusterOptions {
+	return o.defaultClusterOptions
 }
 
 // TestMain deals with global options and setting up a signal-bound context
 // for all tests to use.
 func TestMain(m *testing.M) {
 	flag.StringVar(&opts.LogLevel, "log-level", "info", "logging level")
-	flag.StringVar(&opts.EtcdLogLevel, "etcd-log-level", "info", "logging level for etcd test clusters")
 	flag.StringVar(&opts.MetricsAddr, "metrics-addr", ":8000", "metrics bind address")
-	flag.BoolVar(&opts.ProfilingEnabled, "profiling-enabled", false, "enables profiling on test clusters")
+	flag.StringVar(&opts.defaultClusterOptions.EtcdOperatorImage, "etcd-operator-image", "quay.io/dmace/etcd-cloud-operator:latest", "The etcd operator image to test")
+	flag.StringVar(&opts.defaultClusterOptions.LogLevel, "etcd-log-level", "info", "logging level for etcd test clusters")
+	flag.BoolVar(&opts.defaultClusterOptions.ProfilingEnabled, "profiling-enabled", false, "enables profiling on test clusters")
 	flag.Parse()
 
 	logger.Configure(opts.LogLevel)

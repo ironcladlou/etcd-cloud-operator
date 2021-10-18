@@ -16,11 +16,9 @@ func TestInteractiveCluster(t *testing.T) {
 
 	kubeClient := GetKubeClientOrDie(t)
 
-	clusterOpts := TestClusterOptions{
-		LogLevel:         opts.EtcdLogLevel,
-		ProfilingEnabled: opts.ProfilingEnabled,
-		SnapshotsEnabled: false,
-	}
+	clusterOpts := opts.DefaultClusterOptions()
+	clusterOpts.Size = 3
+
 	_, destroyCluster, err := clusterOpts.CreateCluster(ctx, t, kubeClient)
 	if err != nil {
 		t.Fatalf("failed to create cluster: %v", err)
@@ -39,11 +37,9 @@ func TestKillLeader(t *testing.T) {
 
 	kubeClient := GetKubeClientOrDie(t)
 
-	clusterOpts := TestClusterOptions{
-		LogLevel:         opts.EtcdLogLevel,
-		ProfilingEnabled: opts.ProfilingEnabled,
-		SnapshotsEnabled: false,
-	}
+	clusterOpts := opts.DefaultClusterOptions()
+	clusterOpts.Size = 3
+
 	cluster, destroyCluster, err := clusterOpts.CreateCluster(ctx, t, kubeClient)
 	if err != nil {
 		t.Fatalf("failed to create cluster: %v", err)
@@ -81,11 +77,9 @@ func TestKillAll(t *testing.T) {
 
 	kubeClient := GetKubeClientOrDie(t)
 
-	clusterOpts := TestClusterOptions{
-		LogLevel:         opts.EtcdLogLevel,
-		ProfilingEnabled: opts.ProfilingEnabled,
-		SnapshotsEnabled: false,
-	}
+	clusterOpts := opts.DefaultClusterOptions()
+	clusterOpts.Size = 3
+
 	cluster, destroyCluster, err := clusterOpts.CreateCluster(ctx, t, kubeClient)
 	if err != nil {
 		t.Fatalf("failed to create cluster: %v", err)
@@ -139,11 +133,9 @@ func TestTransientMajorityOutage(t *testing.T) {
 
 	kubeClient := GetKubeClientOrDie(t)
 
-	clusterOpts := TestClusterOptions{
-		LogLevel:         opts.EtcdLogLevel,
-		ProfilingEnabled: opts.ProfilingEnabled,
-		SnapshotsEnabled: false,
-	}
+	clusterOpts := opts.DefaultClusterOptions()
+	clusterOpts.Size = 3
+
 	cluster, destroyCluster, err := clusterOpts.CreateCluster(ctx, t, kubeClient)
 	if err != nil {
 		t.Fatalf("failed to create cluster: %v", err)

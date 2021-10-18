@@ -39,9 +39,11 @@ type testCluster struct {
 }
 
 type TestClusterOptions struct {
-	LogLevel         string
-	ProfilingEnabled bool
-	SnapshotsEnabled bool
+	EtcdOperatorImage string
+	Size              int
+	LogLevel          string
+	ProfilingEnabled  bool
+	SnapshotsEnabled  bool
 }
 
 func (o TestClusterOptions) CreateCluster(ctx context.Context, t *testing.T, kubeClient crclient.Client) (*testCluster, func(context.Context), error) {
@@ -50,7 +52,6 @@ func (o TestClusterOptions) CreateCluster(ctx context.Context, t *testing.T, kub
 	testName := strings.ReplaceAll(t.Name(), "/", "_")
 
 	namespace := GenerateName("etcd-")
-	clusterSize := 3
 
 	var snapshotConfig snapshot.Config
 	if o.SnapshotsEnabled {
@@ -68,26 +69,38 @@ func (o TestClusterOptions) CreateCluster(ctx context.Context, t *testing.T, kub
 
 	t.Logf("creating etcd cluster in namespace %s", namespace)
 	manifests := &Manifests{
-		TestID:          testID,
-		TestName:        testName,
-		TestNamespace:   namespace,
-		Replicas:        clusterSize,
-		LogLevel:        o.LogLevel,
-		EnableProfiling: o.ProfilingEnabled,
-		SnapshotConfig:  snapshotConfig,
+		EtcdOperatorImage: o.EtcdOperatorImage,
+		TestID:            testID,
+		TestName:          testName,
+		TestNamespace:     namespace,
+		Replicas:          o.Size,
+		LogLevel:          o.LogLevel,
+		EnableProfiling:   o.ProfilingEnabled,
+		SnapshotConfig:    snapshotConfig,
 	}
 	resources := []crclient.Object{
 		manifests.Namespace(), manifests.ECOConfigMap(), manifests.DiscoveryService(),
 		manifests.ClientService(), manifests.StatefulSet(), manifests.ServiceMonitor(),
 	}
+
+	teardownNamespace := func() {
+		if err := kubeClient.Delete(context.Background(), &corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: namespace}}); err != nil {
+			if !apierrors.IsNotFound(err) {
+				t.Errorf("failed to delete namespace %s: %v", namespace, err)
+			}
+		}
+	}
+
 	for _, obj := range resources {
 		t.Logf("creating resource %s/%s/%s", obj.GetObjectKind().GroupVersionKind().Kind, obj.GetNamespace(), obj.GetName())
 		if err := kubeClient.Create(ctx, obj); err != nil {
+			teardownNamespace()
 			return nil, nil, fmt.Errorf("failed to create etcd cluster resource: %w", err)
 		}
 	}
 
 	// Asynchronously record the time it takes the stateful set to report ready
+	// TODO: do this and cluster health async in a waitgroup or something
 	go func() {
 		ss := manifests.StatefulSet().DeepCopy()
 		if err := wait.PollUntil(5*time.Second, func() (bool, error) {
@@ -95,18 +108,18 @@ func (o TestClusterOptions) CreateCluster(ctx context.Context, t *testing.T, kub
 				return false, nil
 			}
 			return *ss.Spec.Replicas == ss.Status.ReadyReplicas, nil
-		}, ctx.Done()); err != nil {
-			t.Logf("failed to assess status of statefulset: %v", err)
+		}, ctx.Done()); err == nil {
+			// TODO: Compare with actual pod start time or add new metric
+			InitialClusterReplicasReadySeconds.
+				With(prometheus.Labels{"test_id": testID, "test_name": testName}).
+				Add(time.Since(start).Seconds())
 		}
-		// TODO: Compare with actual pod start time or add new metric
-		InitialClusterReplicasReadySeconds.
-			With(prometheus.Labels{"test_id": testID, "test_name": testName}).
-			Add(time.Since(start).Seconds())
 	}()
 
 	clientService := fmt.Sprintf("client.%s.svc.cluster.local", namespace)
 	etcdClient, err := etcd.NewClient([]string{clientService}, etcd.SecurityConfig{}, true)
 	if err != nil {
+		teardownNamespace()
 		return nil, nil, fmt.Errorf("failed to create etcd cluster client: %w", err)
 	}
 
@@ -115,7 +128,7 @@ func (o TestClusterOptions) CreateCluster(ctx context.Context, t *testing.T, kub
 		timeout, cancel := context.WithTimeout(ctx, 2*time.Minute)
 		defer cancel()
 		return wait.PollUntil(5*time.Second, func() (bool, error) {
-			if _, err := IsHealthy(ctx, etcdClient, clusterSize); err != nil {
+			if _, err := IsHealthy(ctx, etcdClient, o.Size); err != nil {
 				t.Logf("cluster still isn't healthy: %v", err)
 				return false, nil
 			} else {
@@ -123,6 +136,7 @@ func (o TestClusterOptions) CreateCluster(ctx context.Context, t *testing.T, kub
 			}
 		}, timeout.Done())
 	}(); err != nil {
+		teardownNamespace()
 		return nil, nil, fmt.Errorf("failed waiting for cluster to be healthy: %w", err)
 	}
 	InitialClusterStartupSeconds.
@@ -137,16 +151,12 @@ func (o TestClusterOptions) CreateCluster(ctx context.Context, t *testing.T, kub
 		t.Logf("waiting 10s before deleting cluster to allow metrics scraping")
 		<-time.After(10 * time.Second)
 		t.Logf("deleting etcd cluster namespace %s", namespace)
-		if err := kubeClient.Delete(ctx, &corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: namespace}}); err != nil {
-			if !apierrors.IsNotFound(err) {
-				t.Logf("failed to delete namespace %s: %v", namespace, err)
-			}
-		}
+		teardownNamespace()
 	}
 
 	return &testCluster{
 		namespace:     namespace,
-		size:          clusterSize,
+		size:          o.Size,
 		client:        etcdClient,
 		clientService: clientService,
 	}, cancelFn, nil

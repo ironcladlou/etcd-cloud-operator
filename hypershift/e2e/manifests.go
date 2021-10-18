@@ -20,13 +20,14 @@ import (
 )
 
 type Manifests struct {
-	TestID          string
-	TestName        string
-	TestNamespace   string
-	Replicas        int
-	LogLevel        string
-	EnableProfiling bool
-	SnapshotConfig  snapshot.Config
+	EtcdOperatorImage string
+	TestID            string
+	TestName          string
+	TestNamespace     string
+	Replicas          int
+	LogLevel          string
+	EnableProfiling   bool
+	SnapshotConfig    snapshot.Config
 }
 
 func (m *Manifests) labels() map[string]string {
@@ -365,7 +366,7 @@ func (m *Manifests) StatefulSet() *appsv1.StatefulSet {
 				},
 				Spec: corev1.PodSpec{
 					Containers: []corev1.Container{
-						*etcdContainer("quay.io/dmace/etcd-cloud-operator:latest", 3),
+						*etcdContainer(m.EtcdOperatorImage, m.Replicas),
 					},
 					Volumes: []corev1.Volume{
 						{
